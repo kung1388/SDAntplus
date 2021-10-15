@@ -4,25 +4,25 @@
 Copyright (c) 2020 Ryan Green.
 Copyright (c) 2020 Gábor Ziegler and other contributors
 
-Portions of this repo contains sourcecode either inspired by or copied from 
-published code from Adafruit Industires, from thisisant.com and from 
+Portions of this repo contains sourcecode either inspired by or copied from
+published code from Adafruit Industires, from thisisant.com and from
 Nordic Semiconductor ASA. The main inputs were:
 * Adafruit_nRF52_Arduino repo and various public forks of that (LGPL License)
 * The nRF5 SDK by Nordic Semiconductor (a mashup of licenses)
 * Various ANT+ software from thisisant.com
 
-The license conditions of particular files can be found in the top of the 
-individual files. The TL/DR summary of the restrictions beyond the usual 
+The license conditions of particular files can be found in the top of the
+individual files. The TL/DR summary of the restrictions beyond the usual
  MIT license:
 * This software, with or without modification, must only be used with a
   Nordic Semiconductor ASA integrated circuit.
 * The user if this software, with or without modification, must comply with
   the ANT licensing terms: https://www.thisisant.com/developer/ant/licensing.
-  (Note particluarly that the said ANT license permits only non-commercial, 
+  (Note particluarly that the said ANT license permits only non-commercial,
   non revenue-generating usage without paying a yearly license fee.)
 
 The rest of this library, which are original contributions or
-derivative works falls under the MIT license. 
+derivative works falls under the MIT license.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,7 @@ copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software. The notifications about the 
+copies or substantial portions of the Software. The notifications about the
 legal requirements of adhering to the Nordic Semiconductor ASA and the
 thisiant.com licensing terms shall be included.
 
@@ -52,8 +52,8 @@ SOFTWARE.
 
 #include "../ANTProfile.h"
 
-#define CHAN_ID_DEV_NUM         49                          // <o> CHAN_ID_DEV_NUM - Channel ID: Device Number. 
- 
+//#define UINT16_MAX                65535
+
 #define BSC_ANTPLUS_RF_FREQ      0x39u                      ///< Frequency, decimal 57 (2457 MHz).
 
 #define BSC_MSG_PERIOD_4Hz       1u                         ///< Message period, 4 Hz (in basic period counts, where basic period time = 0.25 s).
@@ -64,8 +64,18 @@ SOFTWARE.
 #define BSC_MSG_PERIOD_COMBINED  0x1F96u                    ///< Message period in ticks, decimal 8086 (4.05 Hz).
 
 #define BSC_EXT_ASSIGN           0x00                       ///< ANT ext assign (see Ext. Assign Channel Parameters in ant_parameters.h: @ref ant_parameters).
-#define BSC_DISP_CHANNEL_TYPE    CHANNEL_TYPE_SLAVE_RX_ONLY ///< Display BSC channel type.
+#define BSC_DISP_CHANNEL_TYPE    CHANNEL_TYPE_SLAVE         ///< Display BSC channel type.
 #define BSC_SENS_CHANNEL_TYPE    CHANNEL_TYPE_MASTER        ///< Sensor BSC channel type.
+#define ANT_BSC_TRANS_TYPE       0	                        // transmission type.
+
+#define BSC_EVT_TIME_FACTOR         1024                                                            /**< Time unit factor for BSC events */
+#define BSC_RPM_TIME_FACTOR         60                                                              /**< Time unit factor for RPM unit */
+#define BSC_MS_TO_KPH_NUM           36                                                              /**< Numerator of [m/s] to [kph] ratio */
+#define BSC_MS_TO_KPH_DEN           10                                                              /**< Denominator of [m/s] to [kph] ratio */
+#define BSC_MM_TO_M_FACTOR          1000                                                            /**< Unit factor [m/s] to [mm/s] */
+#define SPEED_COEFFICIENT           (m_wheel_circumference * BSC_EVT_TIME_FACTOR * BSC_MS_TO_KPH_NUM / BSC_MS_TO_KPH_DEN / BSC_MM_TO_M_FACTOR)
+                                                                                                    /**< Coefficient for speed value calculation */
+#define CADENCE_COEFFICIENT         (BSC_EVT_TIME_FACTOR * BSC_RPM_TIME_FACTOR)                     /**< Coefficient for cadence value calculation */
 
 
 #define BSC_MF_ID 2
@@ -208,7 +218,7 @@ public:
       BSC_BAT_STATUS_CRITICAL = 5,    ///< Battery status: critical.
       RESERVED1               = 6,    ///< Reserved.
       BSC_BAT_STATUS_INVALID  = 7     ///< Invalid battery status.
-   } ant_bsc_bat_status_t;   
+   } ant_bsc_bat_status_t;
 
    uint8_t GetFractionalBatteryVoltage() { return fract_bat_volt; };
    void SetFractionalBatteryVoltage(uint8_t val) { fract_bat_volt = val; }
@@ -287,10 +297,6 @@ public:
 
 
 private:
-    uint16_t cadence_event_time;          ///< Cadence event time (time of last cadence event).
-    uint16_t cadence_rev_count;           ///< Cadence revolution count. (pedal revolution count)
-    uint16_t speed_event_time;            ///< Speed event time. (time of last speed event)
-    uint16_t speed_rev_count;             ///< Speed revolution count. (count of wheel revolutions)
 
    /**@brief BSC page 0 data layout structure. */
    typedef struct
@@ -305,6 +311,10 @@ private:
       uint8_t speed_rev_count_MSB;
    }ant_bsc_combined_page0_data_layout_t;
 
+   uint16_t cadence_event_time;          ///< Cadence event time (time of last cadence event).
+   uint16_t cadence_rev_count;           ///< Cadence revolution count. (pedal revolution count)
+   uint16_t speed_event_time;            ///< Speed event time. (time of last speed event)
+   uint16_t speed_rev_count;             ///< Speed revolution count. (count of wheel revolutions)
 };
 
 typedef enum{
@@ -319,22 +329,23 @@ public:
    BicycleSpeedCadence(BSCDeviceType d_t, ANTTransmissionMode mode);
 
    void ProcessMessage(ant_evt_t*);
-
-   // void SetSpeed(float val);
-   // float GetSpeed() { return m_speed; };
+   void setOnCadenceData(void (*fp)(uint32_t)) {_OnComboCadenceData_cb = fp;} ;
+   void setOnSpeedData(void (*fp)(uint32_t)) {_OnComboSpeedData_cb = fp;} ;
 
    void AddCadenceRevolution();
    void AddSpeedRevolution();
 
-   void SetWheelCircumference(float len) { m_wheel_circumference = len; };
+   void SetWheelCircumferenceMM(uint32_t len) { m_wheel_circumference = len;};
    float GetDistanceTravelled() { return m_distance_meters; };
+   uint32_t ChangeDeviceNumber(ant_evt_t *evt, uint16_t number);
+   uint32_t GetDeviceNumber(ant_evt_t *evt, uint16_t* number);
 
    void SetStopped();
 private:
 
-   static const uint8_t DeviceNumber = 49;
+   static const uint16_t DeviceNumber = 0;
 
-   float m_wheel_circumference;
+   uint32_t m_wheel_circumference;
    float m_distance_meters;
    float m_speed;
    uint32_t m_time_of_last_cadence;
@@ -371,6 +382,15 @@ private:
       ant_bsc_combined_message_layout_t   combined;
    }ant_bsc_message_layout_t;
 
+   typedef struct
+   {
+       int32_t acc_rev_cnt;
+       int32_t prev_rev_cnt;
+       int32_t prev_acc_rev_cnt;
+       int32_t acc_evt_time;
+       int32_t prev_evt_time;
+       int32_t prev_acc_evt_time;
+   } bsc_disp_calc_data_t;
 
    BSCPage0 page0;
    BSCPage1 page1;
@@ -390,7 +410,6 @@ private:
    ant_bsc_page_t bkgd_page_number;
    uint8_t         message_counter;
 
-
    void SetNextBackgroundPageNumber();
    ant_bsc_page_t GetNextPageNumber();
 
@@ -398,6 +417,16 @@ private:
    void DecodeMessage(uint8_t* p_message_payload);
 
    // void (*_OnComputedHeartRate_cb) (int);
+   void (*_OnComboCadenceData_cb) (uint32_t);
+   void (*_OnComboSpeedData_cb) (uint32_t);
+//   int16_t m_accumulatedSpeedValue;
+//   int16_t m_previousReceivedSpeedValue;
+//   int16_t m_accumulatedCadenceValue;
+//   int16_t m_previousReceivedCadenceValue;
+//   int16_t m_currentSpeedValue;
+//   int16_t m_currentCadenceValue;
+   bsc_disp_calc_data_t m_speed_calc_data;
+   bsc_disp_calc_data_t m_cadence_calc_data;
 };
 
 
